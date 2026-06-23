@@ -1,10 +1,11 @@
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Request, Response, status
 from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
 
 from app.database import get_db
+from app.config import settings
 from app.models import User
 from app.schemas import (
     LoginRequest,
@@ -80,11 +81,17 @@ def refresh(request: Request, response: Response, db: Session = Depends(get_db))
         raise HTTPException(status_code=401, detail="Missing refresh token")
     access, refresh_token = refresh_session(db, refresh_token)
     _set_auth_cookies(response, access, refresh_token)
+    response.status_code = status.HTTP_204_NO_CONTENT
     return response
 
 
 @router.post("/logout", status_code=204)
-def logout(request: Request, response: Response, db: Session = Depends(get_db), authorization: str | None = None):
+def logout(
+    request: Request,
+    response: Response,
+    db: Session = Depends(get_db),
+    authorization: str | None = Header(default=None),
+):
     access_token = request.cookies.get(settings.access_token_cookie_name)
     refresh_token = request.cookies.get(settings.refresh_token_cookie_name)
     try:
@@ -93,11 +100,12 @@ def logout(request: Request, response: Response, db: Session = Depends(get_db), 
         pass
     revoke_refresh_token(db, refresh_token)
     _clear_auth_cookies(response)
+    response.status_code = status.HTTP_204_NO_CONTENT
     return response
 
 
 @router.get("/validate", response_model=ValidateTokenResponse)
-def validate(request: Request, authorization: str | None = None):
+def validate(request: Request, authorization: str | None = Header(default=None)):
     user_id, role = validate_token(
         authorization,
         request.cookies.get(settings.access_token_cookie_name),
