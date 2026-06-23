@@ -2,7 +2,7 @@ import os
 from dataclasses import dataclass
 from uuid import UUID
 
-from fastapi import Header, HTTPException, status
+from fastapi import Header, HTTPException, Request, status
 from jose import JWTError, jwt
 
 from campushire_common.enums import UserRole
@@ -14,10 +14,15 @@ class CurrentUser:
     role: UserRole
 
 
-def _decode_bearer(authorization: str | None) -> CurrentUser | None:
-    if not authorization or not authorization.startswith("Bearer "):
+def _extract_access_token(authorization: str | None, request: Request) -> str | None:
+    if authorization and authorization.startswith("Bearer "):
+        return authorization.removeprefix("Bearer ").strip()
+    return request.cookies.get(os.environ.get("ACCESS_TOKEN_COOKIE_NAME", "access_token"))
+
+
+def _decode_access_token(token: str | None) -> CurrentUser | None:
+    if not token:
         return None
-    token = authorization.removeprefix("Bearer ").strip()
     secret = os.environ.get("JWT_SECRET_KEY", "dev_secret_change_in_production")
     algorithm = os.environ.get("JWT_ALGORITHM", "HS256")
     try:
@@ -30,6 +35,7 @@ def _decode_bearer(authorization: str | None) -> CurrentUser | None:
 
 
 def get_current_user(
+    request: Request,
     x_user_id: str | None = Header(default=None, alias="X-User-Id"),
     x_user_role: str | None = Header(default=None, alias="X-User-Role"),
     authorization: str | None = Header(default=None),
@@ -43,7 +49,7 @@ def get_current_user(
                 detail="Invalid authentication headers",
             ) from exc
 
-    user = _decode_bearer(authorization)
+    user = _decode_access_token(_extract_access_token(authorization, request))
     if user:
         return user
 

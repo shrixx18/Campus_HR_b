@@ -35,6 +35,7 @@ def create_refresh_token(
     *,
     user_id: UUID | str,
     role: str,
+    token_id: str,
     secret_key: str,
     algorithm: str = "HS256",
     expire_days: int = 7,
@@ -43,6 +44,7 @@ def create_refresh_token(
     payload = {
         "sub": str(user_id),
         "role": role,
+        "jti": token_id,
         "type": "refresh",
         "exp": expire,
     }

@@ -2,7 +2,7 @@ import uuid
 from datetime import datetime, timedelta, timezone
 
 import redis
-from fastapi import Header, HTTPException, status
+from fastapi import HTTPException
 from jose import JWTError, jwt
 from sqlalchemy.orm import Session
 
@@ -50,6 +50,7 @@ def authenticate(db: Session, email: str, password: str) -> User:
 
 
 def issue_tokens(db: Session, user: User) -> tuple[str, str]:
+    refresh_jti = str(uuid.uuid4())
     access = create_access_token(
         user_id=user.id,
         role=user.role.value,
@@ -60,16 +61,15 @@ def issue_tokens(db: Session, user: User) -> tuple[str, str]:
     refresh = create_refresh_token(
         user_id=user.id,
         role=user.role.value,
+        token_id=refresh_jti,
         secret_key=settings.jwt_secret_key,
         algorithm=settings.jwt_algorithm,
         expire_days=settings.refresh_token_expire_days,
     )
-    payload = jwt.get_unverified_claims(refresh)
-    jti = payload.get("jti") or str(uuid.uuid4())
     db.add(
         RefreshToken(
             user_id=user.id,
-            token_jti=jti,
+            token_jti=refresh_jti,
             expires_at=datetime.now(timezone.utc) + timedelta(days=settings.refresh_token_expire_days),
         )
     )
@@ -77,23 +77,26 @@ def issue_tokens(db: Session, user: User) -> tuple[str, str]:
     return access, refresh
 
 
-def refresh_access_token(db: Session, refresh_token: str) -> str:
+def refresh_session(db: Session, refresh_token: str) -> tuple[str, str]:
     try:
         payload = jwt.decode(refresh_token, settings.jwt_secret_key, algorithms=[settings.jwt_algorithm])
     except JWTError as exc:
         raise HTTPException(status_code=401, detail="Invalid refresh token") from exc
     if payload.get("type") != "refresh":
         raise HTTPException(status_code=401, detail="Invalid token type")
+    token_jti = payload.get("jti")
+    if not token_jti:
+        raise HTTPException(status_code=401, detail="Invalid refresh token")
+    token_record = db.query(RefreshToken).filter(RefreshToken.token_jti == token_jti).first()
+    now = datetime.now(timezone.utc)
+    if not token_record or token_record.revoked or token_record.expires_at <= now:
+        raise HTTPException(status_code=401, detail="Refresh token expired or revoked")
     user = db.query(User).filter(User.id == payload["sub"]).first()
     if not user:
         raise HTTPException(status_code=401, detail="User not found")
-    return create_access_token(
-        user_id=user.id,
-        role=user.role.value,
-        secret_key=settings.jwt_secret_key,
-        algorithm=settings.jwt_algorithm,
-        expire_minutes=settings.access_token_expire_minutes,
-    )
+    token_record.revoked = True
+    db.commit()
+    return issue_tokens(db, user)
 
 
 def blacklist_token(token: str) -> None:
@@ -112,10 +115,16 @@ def is_token_blacklisted(token: str) -> bool:
     return get_redis().exists(f"blacklist:{token}") == 1
 
 
-def validate_token(authorization: str | None) -> tuple[uuid.UUID, UserRole]:
-    if not authorization or not authorization.startswith("Bearer "):
-        raise HTTPException(status_code=401, detail="Missing bearer token")
-    token = authorization.removeprefix("Bearer ").strip()
+def extract_access_token(authorization: str | None, cookie_token: str | None) -> str:
+    if authorization and authorization.startswith("Bearer "):
+        return authorization.removeprefix("Bearer ").strip()
+    if cookie_token:
+        return cookie_token
+    raise HTTPException(status_code=401, detail="Missing access token")
+
+
+def validate_token(authorization: str | None, cookie_token: str | None) -> tuple[uuid.UUID, UserRole]:
+    token = extract_access_token(authorization, cookie_token)
     if is_token_blacklisted(token):
         raise HTTPException(status_code=401, detail="Token revoked")
     try:
@@ -125,6 +134,22 @@ def validate_token(authorization: str | None) -> tuple[uuid.UUID, UserRole]:
     if payload.get("type") != "access":
         raise HTTPException(status_code=401, detail="Invalid token type")
     return uuid.UUID(payload["sub"]), UserRole(payload["role"])
+
+
+def revoke_refresh_token(db: Session, refresh_token: str | None) -> None:
+    if not refresh_token:
+        return
+    try:
+        payload = jwt.decode(refresh_token, settings.jwt_secret_key, algorithms=[settings.jwt_algorithm])
+    except JWTError:
+        return
+    token_jti = payload.get("jti")
+    if not token_jti:
+        return
+    token_record = db.query(RefreshToken).filter(RefreshToken.token_jti == token_jti).first()
+    if token_record and not token_record.revoked:
+        token_record.revoked = True
+        db.commit()
 
 
 def get_or_create_profile(db: Session, user: User) -> StudentProfile:
