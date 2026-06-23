@@ -1,0 +1,35 @@
+name: Deploy Backend
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Configure SSH
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.AZURE_VM_SSH_KEY }}
+          SSH_HOST: ${{ secrets.AZURE_VM_HOST }}
+        run: |
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+          printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/id_rsa
+          chmod 600 ~/.ssh/id_rsa
+          ssh-keyscan -H "$SSH_HOST" >> ~/.ssh/known_hosts
+
+      - name: Deploy to Azure VM
+        env:
+          SSH_HOST: ${{ secrets.AZURE_VM_HOST }}
+          SSH_USER: ${{ secrets.AZURE_VM_USER }}
+          DEPLOY_PATH: ${{ secrets.AZURE_VM_DEPLOY_PATH }}
+          DEPLOY_BRANCH: ${{ secrets.AZURE_VM_DEPLOY_BRANCH }}
+        run: |
+          ssh "$SSH_USER@$SSH_HOST" "bash '$DEPLOY_PATH/scripts/deploy.sh' '$DEPLOY_PATH' '${DEPLOY_BRANCH:-main}'"

@@ -124,6 +124,13 @@ Test from your browser:
 http://20.219.9.65:8080/health
 ```
 
+If Docker restart policies are configured, the containers may come up automatically after the VM starts. If the health URL does not respond, SSH in and run:
+
+```bash
+cd ~/Campus_HR_b
+docker compose up -d
+```
+
 ## Stop Only Backend Containers
 
 If you want to stop the backend but keep the VM running:
@@ -192,3 +199,26 @@ After starting the VM, confirm the public IP in Azure Portal. If it changes, upd
 3. Browser test URL.
 
 To avoid this, assign a static public IP in Azure.
+
+## CI/CD Note
+
+By default, Azure will not automatically pull the latest GitHub changes when the VM starts. A plain VM only restarts whatever code is already on disk.
+
+This repo includes a GitHub Actions workflow at `.github/workflows/deploy-backend.yml` and a VM deploy script at `scripts/deploy.sh`.
+
+To use it, add these GitHub Actions secrets in the backend repository:
+
+| Secret | Example |
+| --- | --- |
+| `AZURE_VM_HOST` | `20.219.9.65` |
+| `AZURE_VM_USER` | `azureuser` |
+| `AZURE_VM_SSH_KEY` | Contents of `CmpVM_key.pem` |
+| `AZURE_VM_DEPLOY_PATH` | `/home/azureuser/Campus_HR_b` |
+| `AZURE_VM_DEPLOY_BRANCH` | `main` |
+
+After those secrets are configured, every push to `main` will:
+
+1. SSH into the VM.
+2. Pull the latest backend code.
+3. Rebuild and restart the Docker Compose stack.
+4. Check the local health endpoint.
